@@ -1,0 +1,61 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "out",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "minOut",
+          "type": "uint256"
+        }
+      ],
+      "name": "InsufficientOutput",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "minOut",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "swap",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x6080604052348015600e575f5ffd5b506101458061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610029575f3560e01c8063d5bcb9b51461002d575b5f5ffd5b61004061003b3660046100bc565b610052565b60405190815260200160405180910390f35b6040517f2c19b8b80000000000000000000000000000000000000000000000000000000081525f60048201819052602482018490529060440160405180910390fd5b803573ffffffffffffffffffffffffffffffffffffffff811681146100b7575f5ffd5b919050565b5f5f5f5f5f60a086880312156100d0575f5ffd5b6100d986610094565b94506100e760208701610094565b9350604086013592506060860135915061010360808701610094565b9050929550929590935056fea26469706673582212207020a96af7b98cc4476eaccd0423e524106bb853c6afda9e922b7f4b65974c8164736f6c634300081c0033",
+  "deployedBytecode": "0x608060405234801561000f575f5ffd5b5060043610610029575f3560e01c8063d5bcb9b51461002d575b5f5ffd5b61004061003b3660046100bc565b610052565b60405190815260200160405180910390f35b6040517f2c19b8b80000000000000000000000000000000000000000000000000000000081525f60048201819052602482018490529060440160405180910390fd5b803573ffffffffffffffffffffffffffffffffffffffff811681146100b7575f5ffd5b919050565b5f5f5f5f5f60a086880312156100d0575f5ffd5b6100d986610094565b94506100e760208701610094565b9350604086013592506060860135915061010360808701610094565b9050929550929590935056fea26469706673582212207020a96af7b98cc4476eaccd0423e524106bb853c6afda9e922b7f4b65974c8164736f6c634300081c0033"
+}
