@@ -5,7 +5,7 @@
 A Mandate is a smart contract that holds an agent's USDC under rules the agent
 can't break: a cap on every trade, a fair-price check against Chainlink, a loss
 limit with a public stop-loss, an expiry, and no way to move money out. The
-contracts are in [reins-contracts](https://github.com/ic88t/reins-contracts).
+contracts are in [reins-contracts](https://github.com/onreins/reins-contracts).
 This repo is how an agent uses one.
 
 The agent never needs to be trusted. It holds only its own trading key, and
@@ -32,7 +32,7 @@ rather than a raw revert.
 ### Use it from Claude Desktop
 
 ```bash
-git clone https://github.com/ic88t/reins-mcp && cd reins-mcp && npm install
+git clone https://github.com/onreins/reins-mcp && cd reins-mcp && npm install
 ```
 
 Then add it to `claude_desktop_config.json`:
@@ -125,7 +125,7 @@ They run the MCP server through a real MCP client against freshly deployed
 contracts: status, prices and trades; every refusal named instead of dumped as
 a raw revert; tokens that return nothing or restrict who may hold them; and the
 reference agent's decisions. `compiled/` holds the contract builds the tests
-deploy, produced by [reins-contracts](https://github.com/ic88t/reins-contracts).
+deploy, produced by [reins-contracts](https://github.com/onreins/reins-contracts).
 
 ## License
 
