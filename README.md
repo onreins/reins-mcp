@@ -35,7 +35,7 @@ Five bring in the rest of the Reins platform, and need no key at all:
 | `markets` | Live markets on Hyperliquid, Binance and Coinbase: price, 24-hour change and volume, funding for perpetuals |
 | `hot_list` | This four-hour round's hottest and coolest coins, each with a verdict, a reason, limits sized for its swings and a strategy idea |
 | `thesis` | Three readers on one coin (trend, flow, risk), a verdict of hot, watch or cold, and suggested limits |
-| `backtest` | A strategy in plain words, turned into rules and tested on real prices since 2021, after fees, against buying and holding |
+| `backtest` | A strategy in plain words, turned into rules and tested on real prices since 2021, after fees, against buying and holding. The text is sent to the Reins app (`REINS_APP_URL`) to run |
 | `plan_agent` | A deposit and limits, turned into a link to the create page with them filled in. The owner signs it; the AI never can |
 
 A refused trade returns `{ "ok": false, "rule": "TradeTooLarge", "reason": "…" }`

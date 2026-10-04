@@ -234,6 +234,17 @@ describe("MCP server", () => {
     assert.equal(body(res).rule, "TradeTooLarge");
   });
 
+  test("a zero amount and an oversized symbol are rejected by the tool's schema", async () => {
+    const zero = await mcp.callTool({ name: "mandate_check", arguments: { from: "USDC", to: "EURC", amount: "0" } });
+    assert.equal(zero.isError, true);
+    const huge = await mcp.callTool({ name: "mandate_trade", arguments: { from: "X".repeat(5000), to: "EURC", amount: "1" } });
+    assert.equal(huge.isError, true);
+  });
+
+  test("a symbol like __proto__ is just not in the mandate", async () => {
+    await assert.rejects(sdk.check({ from: "__proto__", to: "EURC", amount: "1" }), /not in this mandate/);
+  });
+
   test("a malformed amount is rejected by the tool's schema", async () => {
     const res = await mcp.callTool({ name: "mandate_trade", arguments: { from: "USDC", to: "EURC", amount: "-5" } });
     assert.equal(res.isError, true);

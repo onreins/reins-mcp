@@ -115,10 +115,11 @@ export class MandateClient {
 
   async _token(symbolOrAddress) {
     const tokens = await this.tokens();
+    const key = String(symbolOrAddress);
     const hit =
-      tokens[symbolOrAddress] ??
-      Object.values(tokens).find((t) => t.address.toLowerCase() === String(symbolOrAddress).toLowerCase());
-    if (!hit) throw new Error(`"${symbolOrAddress}" is not in this mandate (have: ${Object.keys(tokens).join(", ")})`);
+      (Object.hasOwn(tokens, key) ? tokens[key] : undefined) ??
+      Object.values(tokens).find((t) => t.address.toLowerCase() === key.toLowerCase());
+    if (!hit) throw new Error(`"${key.slice(0, 40)}" is not in this mandate (have: ${Object.keys(tokens).join(", ")})`);
     return hit;
   }
 

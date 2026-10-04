@@ -42,11 +42,12 @@ import { MandateClient } from "./sdk.js";
 import { PlatformClient } from "./platform.js";
 
 const json = (value) => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
-/** An error in a few words, with a private RPC URL (which can carry an API key) blanked out. */
+/** An error in a few words. Any URL is cut back to its host: a path or query can carry an RPC API key. */
 const say = (err) => {
-  const text = String(err?.shortMessage ?? err?.message ?? err);
+  let text = String(err?.shortMessage ?? err?.message ?? err).slice(0, 500);
   const rpc = process.env.MANDATE_RPC;
-  return rpc ? text.split(rpc).join("<rpc>") : text;
+  if (rpc) text = text.split(rpc).join("<rpc>");
+  return text.replace(/(https?:\/\/[^/\s"'<>]+)[^\s"'<>]*/g, "$1/…");
 };
 const failure = (err) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, error: say(err) }) }] });
 /** Run a tool, turning a thrown error into a message the agent can read. */
@@ -58,9 +59,11 @@ const safely = (fn) => async (args) => {
   }
 };
 
+const symbolSchema = z.string().trim().min(1).max(32);
 const amountSchema = z
   .string()
-  .regex(/^\d+(\.\d+)?$/, "a positive decimal number, e.g. 5 or 2.5")
+  .max(40)
+  .regex(/^(?=.*[1-9])\d{1,24}(\.\d{1,18})?$/, "a positive decimal number, e.g. 5 or 2.5")
   .describe("How much of `from` to sell, in whole units (e.g. \"5\" = five dollars)");
 
 const INSTRUCTIONS =
@@ -72,8 +75,13 @@ const INSTRUCTIONS =
   "(the owner signs the link, you never create or fund agents yourself).";
 
 function registerMandateTools(server, client) {
-  // Refused trades never reach the chain, so the server keeps its own note of them.
+  // Refused trades never reach the chain, so the server keeps its own note of
+  // them: the latest 200 tries, so a looping agent can't grow it forever.
   const session = [];
+  const note = (entry) => {
+    session.push(entry);
+    if (session.length > 200) session.shift();
+  };
 
   server.registerTool(
     "mandate_status",
@@ -85,7 +93,7 @@ function registerMandateTools(server, client) {
         "Check this before trading.",
       inputSchema: {},
     },
-    async () => json(await client.status()),
+    safely(() => client.status()),
   );
 
   server.registerTool(
@@ -95,9 +103,9 @@ function registerMandateTools(server, client) {
       description:
         "The Chainlink price for an asset in your mandate. Every trade is checked against this " +
         "price, and fills worse than the mandate's slippage limit are refused.",
-      inputSchema: { symbol: z.string().describe("Asset symbol, e.g. EURC") },
+      inputSchema: { symbol: symbolSchema.describe("Asset symbol, e.g. EURC") },
     },
-    async ({ symbol }) => json({ symbol, ...(await client.price(symbol)) }),
+    safely(async ({ symbol }) => ({ symbol, ...(await client.price(symbol)) })),
   );
 
   server.registerTool(
@@ -109,8 +117,8 @@ function registerMandateTools(server, client) {
         "or the rule it would break and why, plus the trade's size against your cap and, if it's too big, " +
         "the largest amount you could trade instead. Use it before mandate_trade.",
       inputSchema: {
-        from: z.string().describe("Symbol to sell, e.g. USDC"),
-        to: z.string().describe("Symbol to buy, e.g. EURC"),
+        from: symbolSchema.describe("Symbol to sell, e.g. USDC"),
+        to: symbolSchema.describe("Symbol to buy, e.g. EURC"),
         amount: amountSchema,
       },
     },
@@ -125,8 +133,8 @@ function registerMandateTools(server, client) {
         "Trade an amount of one asset in your mandate for another. The mandate contract enforces " +
         "the rules: if a rule would be broken the trade is refused and you get the reason back.",
       inputSchema: {
-        from: z.string().describe("Symbol to sell, e.g. USDC"),
-        to: z.string().describe("Symbol to buy, e.g. EURC"),
+        from: symbolSchema.describe("Symbol to sell, e.g. USDC"),
+        to: symbolSchema.describe("Symbol to buy, e.g. EURC"),
         amount: amountSchema,
       },
     },
@@ -134,19 +142,19 @@ function registerMandateTools(server, client) {
       const at = new Date().toISOString();
       try {
         const done = await client.trade({ from, to, amount });
-        session.push({ at, ok: true, from, to, amount, hash: done.hash });
+        note({ at, ok: true, from, to, amount, hash: done.hash });
         return json({ ok: true, ...done });
       } catch (err) {
         // Sent, but its receipt couldn't be read: it may well have filled. Say so,
         // with the hash, so the agent checks before trying again.
         if (err.hash && !err.mandate) {
           const unsure = { ok: null, status: "sent, unconfirmed", hash: err.hash, reason: say(err) };
-          session.push({ at, from, to, amount, ...unsure });
+          note({ at, from, to, amount, ...unsure });
           return { isError: true, content: [{ type: "text", text: JSON.stringify(unsure) }] };
         }
         // A refusal is information for the agent, not a crash.
         const refusal = { ok: false, rule: err.mandate?.rule ?? "Error", reason: err.mandate?.reason ?? say(err) };
-        session.push({ at, from, to, amount, ...refusal });
+        note({ at, from, to, amount, ...refusal });
         return { isError: true, content: [{ type: "text", text: JSON.stringify(refusal) }] };
       }
     },
@@ -183,7 +191,7 @@ function registerPlatformTools(server, platform) {
         "Live markets on Hyperliquid (perpetuals), Binance and Coinbase (spot): price, 24-hour change and volume, " +
         "and funding for perpetuals. Search by coin or pair (\"ETH\", \"SOL/USDC\"), busiest first.",
       inputSchema: {
-        query: z.string().optional().describe("A coin or pair, e.g. ETH or BTC/USDT; empty for the busiest markets"),
+        query: z.string().max(40).optional().describe("A coin or pair, e.g. ETH or BTC/USDT; empty for the busiest markets"),
         venue: z.enum(["all", "hyperliquid", "binance", "coinbase"]).optional(),
         limit: z.number().int().min(1).max(50).optional(),
       },
@@ -211,7 +219,7 @@ function registerPlatformTools(server, platform) {
         "Three readers on one coin: trend (momentum), flow (volume and funding) and risk (how big its swings are), " +
         "a verdict of hot, watch or cold, suggested limits, and a strategy idea. Give a coin (ETH), a pair " +
         "(ETH/USDC), a perpetual (ETH-PERP) or an id (binance:ETHUSDT).",
-      inputSchema: { symbol: z.string().describe("e.g. ETH, SOL/USDC, BTC-PERP") },
+      inputSchema: { symbol: z.string().trim().min(1).max(40).describe("e.g. ETH, SOL/USDC, BTC-PERP") },
     },
     safely(({ symbol }) => platform.thesis(symbol)),
   );
@@ -226,7 +234,7 @@ function registerPlatformTools(server, platform) {
         "buying and holding. Past results only.",
       inputSchema: {
         strategy: z.string().min(8).max(600).describe("The strategy in plain words"),
-        from: z.string().optional().describe("Start of the test, e.g. 2024 or 2021 (default 2021)"),
+        from: z.string().max(10).optional().describe("Start of the test, e.g. 2024 or 2021 (default 2021)"),
       },
     },
     safely(({ strategy, from }) => platform.backtest(strategy, { from })),
@@ -245,7 +253,7 @@ function registerPlatformTools(server, platform) {
         lossPercent: z.number().min(1).max(60).describe("Freeze after losing this much, e.g. 10"),
         tradePercent: z.number().min(5).max(100).describe("Largest single trade, as a % of the deposit"),
         bandPercent: z.number().min(0.1).max(5).optional().describe("Refuse fills this far from the oracle price, default 1"),
-        market: z.string().optional().describe("The market it was planned on, e.g. ETH-PERP"),
+        market: z.string().max(40).optional().describe("The market it was planned on, e.g. ETH-PERP"),
       },
     },
     safely(async (args) => platform.planAgent(args)),
