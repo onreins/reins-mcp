@@ -17,17 +17,43 @@ Part of [Reins](https://reins.one) · app at [app.reins.one](https://app.reins.o
 
 ## The MCP server
 
-Three tools for any MCP client (Claude Desktop, Claude Code, or any agent
-framework that speaks MCP):
+Ten tools for any MCP client (Claude Desktop, Claude Code, or any agent
+framework that speaks MCP). Five run the agent's account:
 
 | Tool | What it does |
 |---|---|
 | `mandate_status` | Equity in USD, what the Mandate holds, the rules it trades within (max trade size, loss limit, allowed assets, expiry) and how much loss headroom is left |
 | `mandate_price` | The Chainlink price for an asset, the one every trade is checked against |
+| `mandate_check` | Would this trade go through? The contract simulates it and nothing is sent: what it would receive, or the rule it would break and the largest amount it could trade instead |
 | `mandate_trade` | Trade an amount of one asset for another, e.g. `{ "from": "USDC", "to": "EURC", "amount": "5" }` |
+| `mandate_history` | Recent on-chain events (trades, deposits, withdrawals, freezes), plus every trade tried this session, including refused ones, which never reach the chain |
+
+Five bring in the rest of the Reins platform, and need no key at all:
+
+| Tool | What it does |
+|---|---|
+| `markets` | Live markets on Hyperliquid, Binance and Coinbase: price, 24-hour change and volume, funding for perpetuals |
+| `hot_list` | This four-hour round's hottest and coolest coins, each with a verdict, a reason, limits sized for its swings and a strategy idea |
+| `thesis` | Three readers on one coin (trend, flow, risk), a verdict of hot, watch or cold, and suggested limits |
+| `backtest` | A strategy in plain words, turned into rules and tested on real prices since 2021, after fees, against buying and holding |
+| `plan_agent` | A deposit and limits, turned into a link to the create page with them filled in. The owner signs it; the AI never can |
 
 A refused trade returns `{ "ok": false, "rule": "TradeTooLarge", "reason": "…" }`
-rather than a raw revert.
+rather than a raw revert, and `mandate_check` tells the agent before it tries.
+
+So one conversation can go from "what's moving?" (`hot_list`) to "test buying
+it on a trend" (`backtest`) to "set it up with a 10% loss limit" (`plan_agent`),
+and then trade inside the rules (`mandate_check`, `mandate_trade`).
+
+### Research only
+
+Started with no `MANDATE_ADDRESS` and `MANDATE_AGENT_KEY`, the server offers
+just the five platform tools. It's a way to try Reins from Claude before
+creating an agent:
+
+```json
+{ "mcpServers": { "reins": { "command": "node", "args": ["/path/to/reins-mcp/src/mcp-server.js"] } } }
+```
 
 ### Use it from Claude Desktop
 
@@ -59,6 +85,7 @@ Then add it to `claude_desktop_config.json`:
 | `MANDATE_AGENT_KEY` | **The agent's own trading key**, never the owner's wallet. The contract refuses to let the owner also be the agent. |
 | `MANDATE_NETWORK` | `mainnet` (default) or `testnet` |
 | `MANDATE_RPC` | Optional RPC URL; defaults to Arc's public endpoint |
+| `REINS_APP_URL` | Optional; where backtests run and plan links point. Defaults to `https://app.reins.one` |
 
 Create a Mandate and its agent key in the app at
 [app.reins.one](https://app.reins.one), or with `createMandate` below.

@@ -14,6 +14,7 @@ import { publicClient, walletFor, account, waitForNode, localChain } from "./hel
 import { artifact } from "../src/artifacts.js";
 import { MandateClient, createMandate } from "../src/sdk.js";
 import { createMandateMcpServer } from "../src/mcp-server.js";
+import { stubPlatform } from "./platform.fixtures.js";
 
 const deployer = walletFor(0);
 const owner = walletFor(1);
@@ -69,7 +70,7 @@ before(async () => {
   });
   sdk = new MandateClient({ publicClient, wallet: agent, address: mandate });
 
-  const server = createMandateMcpServer({ client: sdk });
+  const server = createMandateMcpServer({ client: sdk, platform: stubPlatform() });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   mcp = new Client({ name: "test-agent", version: "1.0.0" });
   await Promise.all([server.connect(serverSide), mcp.connect(clientSide)]);
@@ -113,6 +114,39 @@ describe("SDK", () => {
     });
   });
 
+  test("check says a trade inside the rules would go through, and sends nothing", async () => {
+    await freshPrice();
+    const before = await sdk.status();
+    const c = await sdk.check({ from: "USDC", to: "EURC", amount: "5" });
+    assert.equal(c.allowed, true);
+    assert.equal(c.wouldReceive.symbol, "EURC");
+    assert.ok(Math.abs(c.wouldReceive.amount - 5 / 1.138) < 1e-5, `got ${c.wouldReceive.amount}`);
+    assert.equal(c.tradeUsd, 5);
+    assert.equal(c.maxTradeUsd, 10);
+    const after = await sdk.status();
+    assert.deepEqual(after.holdings, before.holdings);
+  });
+
+  test("check names the rule a trade would break, and the most it could do instead", async () => {
+    await freshPrice();
+    const c = await sdk.check({ from: "USDC", to: "EURC", amount: "25" });
+    assert.equal(c.allowed, false);
+    assert.equal(c.rule, "TradeTooLarge");
+    assert.match(c.reason, /per-trade limit/);
+    assert.equal(c.maxAmount, 10);
+  });
+
+  test("history lists what the agent did on-chain, newest first", async () => {
+    await freshPrice();
+    await sdk.trade({ from: "USDC", to: "EURC", amount: "2" });
+    const h = await sdk.history({ limit: 10 });
+    assert.equal(h.events[0].event, "Traded");
+    assert.equal(h.events[0].sold.symbol, "USDC");
+    assert.equal(h.events[0].sold.amount, 2);
+    assert.ok(h.events.some((e) => e.event === "Deposited" && e.amount === 50));
+    assert.ok(h.fromBlock <= h.toBlock);
+  });
+
   test("an asset outside the mandate is refused before anything is sent", async () => {
     await assert.rejects(sdk.trade({ from: "USDC", to: "DOGE", amount: "1" }), /not in this mandate/);
   });
@@ -154,9 +188,28 @@ describe("SDK", () => {
 describe("MCP server", () => {
   const body = (res) => JSON.parse(res.content[0].text);
 
-  test("lists the three tools an agent needs", async () => {
+  test("lists the mandate tools and the platform's research tools", async () => {
     const { tools } = await mcp.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["mandate_price", "mandate_status", "mandate_trade"]);
+    assert.deepEqual(tools.map((t) => t.name).sort(), [
+      "backtest", "hot_list", "mandate_check", "mandate_history", "mandate_price", "mandate_status", "mandate_trade",
+      "markets", "plan_agent", "thesis",
+    ]);
+  });
+
+  test("an agent can check a trade before making it", async () => {
+    await freshPrice();
+    const c = body(await mcp.callTool({ name: "mandate_check", arguments: { from: "USDC", to: "EURC", amount: "50" } }));
+    assert.equal(c.allowed, false);
+    assert.equal(c.rule, "TradeTooLarge");
+  });
+
+  test("history includes this session's refused trades, which never reach the chain", async () => {
+    await freshPrice();
+    await mcp.callTool({ name: "mandate_trade", arguments: { from: "USDC", to: "EURC", amount: "40" } });
+    const h = body(await mcp.callTool({ name: "mandate_history", arguments: { limit: 5 } }));
+    const refused = h.thisSession.filter((x) => !x.ok);
+    assert.ok(refused.some((x) => x.rule === "TradeTooLarge" && x.amount === "40"), JSON.stringify(h.thisSession));
+    assert.ok(Array.isArray(h.onChain));
   });
 
   test("an agent can read its rules and headroom", async () => {

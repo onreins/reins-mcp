@@ -1,7 +1,7 @@
 {
   "name": "reins-mcp",
-  "version": "1.0.0",
-  "description": "Let any AI agent trade through a Mandate on Arc: an MCP server, a JavaScript SDK and a reference agent.",
+  "version": "1.1.0",
+  "description": "Let any AI agent research markets, backtest ideas and trade through a Reins mandate on Arc: an MCP server, a JavaScript SDK and a reference agent.",
   "type": "module",
   "license": "MIT",
   "engines": {

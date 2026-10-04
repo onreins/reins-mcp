@@ -39,6 +39,8 @@ const FACTORY_ABI = [...FACTORY.abi, ...MANDATE.abi.filter((x) => x.type === "er
  */
 const TRADE_ABI = [...MANDATE.abi, ...VENUE.abi.filter((x) => x.type === "error")];
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /** Plain-language reasons for every rule a trade can hit. */
 const REASONS = {
   NotAgent: "this key is not the mandate's agent (it may have been revoked)",
@@ -190,6 +192,115 @@ export class MandateClient {
       floorUsd: dollars(floor),
       lossHeadroomUsd: equity === null ? null : Math.max(0, dollars(equity) - dollars(floor)),
     };
+  }
+
+  /**
+   * Would this trade go through? Simulates it against the contract without
+   * sending anything, so an agent can plan around a rule instead of hitting it.
+   * Returns { allowed, wouldReceive } or { allowed: false, rule, reason }, with
+   * the trade's size against the cap and, when it's too big, the most it could do.
+   */
+  async check({ from, to, amount }) {
+    const [tIn, tOut, s] = await Promise.all([this._token(from), this._token(to), this.status()]);
+    const usdIn = await this.price(tIn.symbol).then((p) => p.usd).catch(() => null);
+    const sizes = {
+      tradeUsd: usdIn === null ? null : Number(amount) * usdIn,
+      maxTradeUsd: s.rules.maxTradeUsd,
+      lossHeadroomUsd: s.lossHeadroomUsd,
+    };
+    try {
+      const { result } = await this.publicClient.simulateContract({
+        address: this.address,
+        abi: TRADE_ABI,
+        functionName: "trade",
+        args: [tIn.address, tOut.address, parseUnits(String(amount), tIn.decimals), 0n],
+        account: this.wallet?.account ?? s.agent,
+      });
+      return { allowed: true, wouldReceive: { symbol: tOut.symbol, amount: Number(formatUnits(result, tOut.decimals)) }, ...sizes };
+    } catch (err) {
+      // Only a revert is the contract saying no. A network error or a busy RPC
+      // is not a rule, so it goes back to the caller as an error.
+      const reverted = err instanceof BaseError && err.walk((e) => e instanceof ContractFunctionRevertedError);
+      if (!reverted) throw err;
+      const why = explain(err);
+      const room = why.rule === "TradeTooLarge" && usdIn ? { maxAmount: Math.floor((s.rules.maxTradeUsd / usdIn) * 1e6) / 1e6 } : {};
+      return { allowed: false, ...why, ...sizes, ...room };
+    }
+  }
+
+  /**
+   * What the mandate did on-chain, newest first: trades, deposits, withdrawals,
+   * freezes. Refused trades never land on-chain, so they aren't here.
+   * Reads backwards in 9,999-block pages (Arc's public RPC refuses wider
+   * eth_getLogs) until `limit` events or `maxBlocks` of history.
+   */
+  async history({ limit = 20, maxBlocks = 400_000, pageDelayMs = 250, retryDelayMs = 800 } = {}) {
+    const PAGE = 9_999n;
+    const head = await this.publicClient.getBlockNumber({ cacheTime: 0 });
+    const tokens = Object.fromEntries(Object.values(await this.tokens()).map((t) => [t.address.toLowerCase(), t]));
+    const base = await this._base();
+    const sym = (address) => tokens[String(address).toLowerCase()];
+    const amountOf = (raw, t) => Number(formatUnits(raw, t?.decimals ?? base.decimals));
+    const events = [];
+    const stop = head > BigInt(maxBlocks) ? head - BigInt(maxBlocks) : 0n;
+    let to = head;
+    let from = head;
+    let partial = false;
+    let first = true;
+    while (events.length < limit && to >= stop) {
+      from = to > stop + PAGE ? to - PAGE : stop;
+      // The public RPC rate-limits bursts of eth_getLogs: pace the pages, back
+      // off when refused, and if it keeps refusing, return what was read so far.
+      if (!first) await sleep(pageDelayMs);
+      first = false;
+      let logs = null;
+      for (let attempt = 0; attempt < 4 && !logs; attempt++) {
+        try {
+          logs = await this.publicClient.getLogs({ address: this.address, fromBlock: from, toBlock: to });
+        } catch (err) {
+          if (!/rate.?limit|limit exceeded|exceeds defined limit|too many requests|\b429\b/i.test(`${err.shortMessage ?? ""} ${err.details ?? ""}`)) throw err;
+          await sleep(retryDelayMs * 2 ** attempt);
+        }
+      }
+      if (!logs) {
+        partial = true;
+        from = to + 1n;
+        break;
+      }
+      for (const log of [...logs].reverse()) {
+        let e;
+        try {
+          e = decodeEventLog({ abi: MANDATE.abi, ...log });
+        } catch {
+          continue;
+        }
+        const at = { event: e.eventName, block: Number(log.blockNumber), tx: log.transactionHash };
+        if (e.eventName === "Traded") {
+          const tIn = sym(e.args.tokenIn);
+          const tOut = sym(e.args.tokenOut);
+          events.push({
+            ...at,
+            sold: { symbol: tIn?.symbol ?? e.args.tokenIn, amount: amountOf(e.args.amountIn, tIn) },
+            bought: { symbol: tOut?.symbol ?? e.args.tokenOut, amount: amountOf(e.args.amountOut, tOut) },
+            equityUsd: amountOf(e.args.equity, base),
+          });
+        } else if (e.eventName === "Deposited") {
+          events.push({ ...at, symbol: base.symbol, amount: amountOf(e.args.amount, base) });
+        } else if (e.eventName === "Withdrawn" || e.eventName === "AssetRemoved") {
+          const t = sym(e.args.token);
+          events.push({ ...at, symbol: t?.symbol ?? e.args.token, amount: amountOf(e.args.amount, t) });
+        } else if (e.eventName === "Frozen") {
+          events.push({ ...at, equityUsd: amountOf(e.args.equity, base), floorUsd: amountOf(e.args.floor, base) });
+        } else if (e.eventName === "Unfrozen") {
+          events.push({ ...at, baselineUsd: amountOf(e.args.baseline, base) });
+        } else if (e.eventName === "AgentChanged") {
+          events.push({ ...at, agent: e.args.agent });
+        }
+      }
+      if (from === 0n || from === stop) break;
+      to = from - 1n;
+    }
+    return { events: events.slice(0, limit), fromBlock: Number(from), toBlock: Number(head), ...(partial ? { partial: true } : {}) };
   }
 
   /**
