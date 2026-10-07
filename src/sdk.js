@@ -13,6 +13,10 @@
 import { parseAbi, parseUnits, formatUnits, decodeEventLog, BaseError, ContractFunctionRevertedError } from "viem";
 
 import { artifact } from "./artifacts.js";
+import { pushPrice } from "./redstone.js";
+
+/** Tries at pushing a fresh oracle price before a trade, when the RPC is busy. */
+const PUSH_ATTEMPTS = 3;
 
 const MANDATE = artifact("Mandate");
 const FACTORY = artifact("MandateFactory");
@@ -305,12 +309,44 @@ export class MandateClient {
   }
 
   /**
+   * Push fresh RedStone prices to the feeds a trade will read, so the contract
+   * checks it against a price seconds old. A no-op for other feeds. A failed
+   * push doesn't stop the trade: the contract still refuses a price older than
+   * the mandate allows, and the failure is reported back.
+   */
+  async refreshPrices(tokens) {
+    const feeds = [...new Set(tokens.filter((t) => t.feed).map((t) => t.feed.toLowerCase()))];
+    const pushed = [];
+    const failed = [];
+    for (const feed of feeds) {
+      // Arc's public RPC refuses bursts ("exceeds defined limit"); a short
+      // backoff usually gets the push through before the trade goes out.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const hash = await pushPrice({ publicClient: this.publicClient, wallet: this.wallet, feed });
+          if (hash) pushed.push(hash);
+          break;
+        } catch (err) {
+          const why = err.shortMessage ?? err.message;
+          if (attempt >= PUSH_ATTEMPTS || !/limit|429|too many/i.test(why)) {
+            failed.push(`${feed}: ${why}`);
+            break;
+          }
+          await sleep(1500 * attempt);
+        }
+      }
+    }
+    return { pushed, failed };
+  }
+
+  /**
    * Trade `amount` of `from` into `to`. Returns what arrived, or throws with
    * `err.mandate = { rule, reason }` naming the rule that refused it.
    */
   async trade({ from, to, amount, minOut = "0" }) {
     if (!this.wallet) throw new Error("trading needs the agent's wallet");
     const [tIn, tOut, base] = await Promise.all([this._token(from), this._token(to), this._base()]);
+    const prices = await this.refreshPrices([tIn, tOut]);
     const amountIn = parseUnits(String(amount), tIn.decimals);
     const min = parseUnits(String(minOut), tOut.decimals);
     let hash;
@@ -367,6 +403,7 @@ export class MandateClient {
       sold: { symbol: tIn.symbol, amount: Number(amount) },
       bought: { symbol: tOut.symbol, amount: Number(formatUnits(traded.args.amountOut, tOut.decimals)) },
       equityUsd: Number(formatUnits(traded.args.equity, base.decimals)),
+      prices,
     };
   }
 }
